@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>F5-TTS - Audio History</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <div class="header-left">
+                <h1>Audio History</h1>
+            </div>
+            <div class="header-right">
+                <div class="user-info">
+                    Welcome, {{ session.name }} | <a href="{{ url_for('index') }}">Home</a> | <a href="{{ url_for('logout') }}">Logout</a>
+                </div>
+                <div class="theme-toggle-container">
+                    <span class="theme-toggle-label">Dark Mode</span>
+                    <label class="theme-toggle">
+                        <input type="checkbox" id="theme-toggle-input">
+                        <span class="theme-toggle-slider"></span>
+                    </label>
+                </div>
+            </div>
+        </header>
+        
+        <main>
+            <div class="history-intro">
+                <p>Below are your previously generated audio files. You can play or download any of them.</p>
+            </div>
+            
+            {% if audio_files %}
+                <div class="history-list">
+                    {% for audio in audio_files %}
+                        <div class="history-item">
+                            <div class="history-item-header">
+                                <div class="history-item-text">
+                                    <h3>{{ audio.text|truncate(50) }}</h3>
+                                    <div class="history-item-meta">
+                                        <span class="meta-language">{{ audio.language|capitalize }}</span>
+                                        <span class="meta-date">{{ audio.timestamp }}</span>
+                                    </div>
+                                </div>
+                                <div class="history-item-actions">
+                                    <button class="btn-toggle-details" data-target="details-{{ loop.index }}">
+                                        <span class="toggle-icon">⚙️</span> Details
+                                    </button>
+                                </div>
+                            </div>
+                            
+                            <div class="history-item-details" id="details-{{ loop.index }}" style="display: none;">
+                                <div class="parameter-list">
+                                    <div class="parameter">
+                                        <span class="parameter-label">NFE Step:</span>
+                                        <span class="parameter-value">{{ audio.parameters.nfe_step }}</span>
+                                    </div>
+                                    <div class="parameter">
+                                        <span class="parameter-label">Speed:</span>
+                                        <span class="parameter-value">{{ audio.parameters.speed }}</span>
+                                    </div>
+                                    <div class="parameter">
+                                        <span class="parameter-label">Seed:</span>
+                                        <span class="parameter-value">{{ audio.parameters.seed }}</span>
+                                    </div>
+                                    <div class="parameter">
+                                        <span class="parameter-label">Remove Silence:</span>
+                                        <span class="parameter-value">{{ 'Yes' if audio.parameters.remove_silence else 'No' }}</span>
+                                    </div>
+                                    <div class="parameter">
+                                        <span class="parameter-label">Use EMA:</span>
+                                        <span class="parameter-value">{{ 'Yes' if audio.parameters.use_ema else 'No' }}</span>
+                                    </div>
+                                </div>
+                                <div class="full-text">
+                                    <span class="full-text-label">Full Text:</span>
+                                    <p class="full-text-content">{{ audio.text }}</p>
+                                </div>
+                            </div>
+                            
+                            <div class="history-item-player">
+                                <audio controls src="{{ url_for('static', filename='audio/' + audio.filename) }}"></audio>
+                            </div>
+                            
+                            <div class="history-item-footer">
+                                <a href="{{ url_for('download_file', filename=audio.filename) }}" class="btn-secondary history-download">Download</a>
+                            </div>
+                        </div>
+                    {% endfor %}
+                </div>
+            {% else %}
+                <div class="empty-history">
+                    <p>You haven't generated any audio files yet.</p>
+                    <a href="{{ url_for('index') }}" class="btn-primary">Generate Your First Audio</a>
+                </div>
+            {% endif %}
+        </main>
+    </div>
+    
+    <script>
+        // Theme toggle functionality
+        document.addEventListener('DOMContentLoaded', function() {
+            const themeToggle = document.getElementById('theme-toggle-input');
+            const htmlElement = document.documentElement;
+            
+            // Check for saved theme preference or use preferred color scheme
+            const savedTheme = localStorage.getItem('theme');
+            if (savedTheme) {
+                htmlElement.setAttribute('data-theme', savedTheme);
+                themeToggle.checked = savedTheme === 'dark';
+            } else {
+                // Check if user prefers dark mode
+                const prefersDarkMode = window.matchMedia('(prefers-color-scheme: dark)').matches;
+                if (prefersDarkMode) {
+                    htmlElement.setAttribute('data-theme', 'dark');
+                    themeToggle.checked = true;
+                }
+            }
+            
+            // Handle theme toggle
+            themeToggle.addEventListener('change', function() {
+                if (this.checked) {
+                    htmlElement.setAttribute('data-theme', 'dark');
+                    localStorage.setItem('theme', 'dark');
+                } else {
+                    htmlElement.setAttribute('data-theme', 'light');
+                    localStorage.setItem('theme', 'light');
+                }
+            });
+            
+            // Toggle details sections
+            document.querySelectorAll('.btn-toggle-details').forEach(button => {
+                button.addEventListener('click', function() {
+                    const targetId = this.getAttribute('data-target');
+                    const targetElement = document.getElementById(targetId);
+                    
+                    if (targetElement.style.display === 'none') {
+                        targetElement.style.display = 'block';
+                        this.classList.add('active');
+                    } else {
+                        targetElement.style.display = 'none';
+                        this.classList.remove('active');
+                    }
+                });
+            });
+        });
+    </script>
+</body>
+</html> 
