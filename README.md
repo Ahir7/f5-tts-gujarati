@@ -32,7 +32,7 @@ A modern web interface for Gujarati Text-to-Speech synthesis using the F5-TTS mo
 
 1. Clone the repository:
 ```bash
-git clone https://github.com/yourusername/f5-tts-web-app.git
+git clone https://github.com/Ahir7/f5-tts-web-app.git
 cd f5-tts-web-app
 ```
 
