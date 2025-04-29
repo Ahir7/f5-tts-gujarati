@@ -6,22 +6,53 @@ from gradio_client import Client, handle_file
 import os
 import tempfile
 import uuid
-import json
 import traceback
 import datetime
 import glob
+from flask_pymongo import PyMongo
+from bson.objectid import ObjectId
 
+# Create the Flask application instance
 app = Flask(__name__, static_folder='static', template_folder='templates')
 app.secret_key = 'your_secret_key'  # Change this to a random string
 CORS(app)
 
-# Mock user database (replace with a real database in production)
-users = {
-    'admin': {
-        'password': generate_password_hash('admin123'),
-        'name': 'Admin User'
-    }
-}
+# MongoDB Configuration with proper authentication and error handling
+try:
+    # Use the credentials you set in docker-compose.yml
+    app.config["MONGO_URI"] = "mongodb://admin:password@localhost:27017/tts_app?authSource=admin"
+    mongo = PyMongo(app)
+    
+    # Test the connection
+    mongo.db.command('ping')
+    print("MongoDB connection successful")
+    
+    # Initialize the database
+    def init_db():
+        try:
+            # Create index on username for faster lookups
+            mongo.db.users.create_index("username", unique=True)
+            
+            # Check if users collection exists and has at least one user
+            if mongo.db.users.count_documents({}) == 0:
+                # Add default admin user
+                mongo.db.users.insert_one({
+                    'username': 'admin',
+                    'password': generate_password_hash('admin123'),
+                    'name': 'Admin User'
+                })
+                print("Initialized database with admin user")
+        except Exception as e:
+            print(f"Database initialization error: {e}")
+    
+    # Initialize the database
+    init_db()
+    
+except Exception as e:
+    print(f"MongoDB connection error: {e}")
+    print("Make sure your MongoDB Docker container is running with the correct credentials")
+
+# Register routes here...
 
 # TTS API configuration
 TTS_API_URL = "http://127.0.0.1:7860/"
@@ -31,35 +62,38 @@ client = Client(TTS_API_URL)
 TEMP_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'static', 'audio')
 os.makedirs(TEMP_DIR, exist_ok=True)
 
-# File to store metadata about generated audio
-AUDIO_METADATA_FILE = os.path.join(TEMP_DIR, 'metadata.json')
-
 # Supported languages and their configurations
 LANGUAGES = {
     'gujarati': {
         'project': 'guj_tts_by_harsh_char',
         'checkpoint': r"C:\Users\harsh\Desktop\TTS_by_Harsh\F5-TTS-kaggle_small\F5-TTS-kaggle_small\src\f5_tts\..\..\ckpts\guj_tts_by_harsh\model_24000.pt",
         'model': 'F5TTS_Base',
-        'ref_text': "કૂવાની આસપાસ બંગડીયોનો ખણખણાટ રૂમઝૂમતો વર્તાય છે.",
-        'ref_audio': r"C:\Users\harsh\AppData\Local\Temp\gradio\d9968d57c887c29feba3cc8814945fc25244dc6a07a44283084d1ffda8a2ff4c\train_gujaratimale_00813.wav"
+        'ref_text': "મિરપુરમાં ડે નાઇટ મેચમાં રાત્રે ઝાકળને કારણે, બોલરોને બોલની ગ્રીપ પકડતા તકલીફ પડતી હોય છે.",
+        'ref_audio': r"C:\Users\harsh\AppData\Local\Temp\gradio\6abf6bd2c9fc8e22d2757791c3afd2971cb1df63d89c749b24f38be4d2f51e5b\train_gujaratimale_00643.wav"
     }
     # Add more languages as needed
 }
 
+# Function to convert MongoDB document to JSON-serializable format
+def mongo_doc_to_dict(doc):
+    if doc is None:
+        return None
+    doc_dict = dict(doc)
+    # Convert ObjectId to string
+    if '_id' in doc_dict:
+        doc_dict['_id'] = str(doc_dict['_id'])
+    return doc_dict
+
 # Function to load or create audio metadata
-def load_audio_metadata():
-    if os.path.exists(AUDIO_METADATA_FILE):
-        with open(AUDIO_METADATA_FILE, 'r') as f:
-            try:
-                return json.load(f)
-            except json.JSONDecodeError:
-                return {}
-    return {}
+def load_audio_metadata(username=None):
+    query = {}
+    if username:
+        query['user'] = username
+    return [mongo_doc_to_dict(doc) for doc in mongo.db.audio_metadata.find(query)]
 
 # Function to save audio metadata
-def save_audio_metadata(metadata):
-    with open(AUDIO_METADATA_FILE, 'w') as f:
-        json.dump(metadata, f, indent=2)
+def save_audio_metadata(audio_data):
+    return mongo.db.audio_metadata.insert_one(audio_data)
 
 @app.route('/')
 def index():
@@ -73,9 +107,11 @@ def login():
         username = request.form.get('username')
         password = request.form.get('password')
         
-        if username in users and check_password_hash(users[username]['password'], password):
+        user = mongo.db.users.find_one({"username": username})
+        
+        if user and check_password_hash(user['password'], password):
             session['username'] = username
-            session['name'] = users[username]['name']
+            session['name'] = user['name']
             return redirect(url_for('index'))
         
         return render_template('login.html', error='Invalid username or password')
@@ -87,6 +123,30 @@ def logout():
     session.pop('username', None)
     session.pop('name', None)
     return redirect(url_for('login'))
+
+@app.route('/register', methods=['GET', 'POST'])
+def register():
+    if request.method == 'POST':
+        username = request.form.get('username')
+        password = request.form.get('password')
+        name = request.form.get('name')
+        
+        # Check if username already exists
+        existing_user = mongo.db.users.find_one({"username": username})
+        if existing_user:
+            return render_template('register.html', error='Username already exists')
+            
+        hashed_password = generate_password_hash(password)
+        
+        mongo.db.users.insert_one({
+            "username": username,
+            "password": hashed_password,
+            "name": name
+        })
+        
+        return redirect(url_for('login'))
+    
+    return render_template('register.html')
 
 @app.route('/generate-speech', methods=['POST'])
 def generate_speech():
@@ -145,12 +205,12 @@ def generate_speech():
             with open(output_path, 'wb') as dst_file:
                 dst_file.write(src_file.read())
         
-        # Save metadata about this audio file
-        metadata = load_audio_metadata()
-        metadata[filename] = {
+        # Save metadata about this audio file to MongoDB
+        metadata = {
+            'filename': filename,
             'text': text,
             'language': language,
-            'timestamp': datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+            'timestamp': datetime.datetime.now(),
             'user': session['username'],
             'parameters': {
                 'nfe_step': data.get('nfe_step', 32),
@@ -189,25 +249,88 @@ def history():
     if 'username' not in session:
         return redirect(url_for('login'))
     
-    # Load metadata for all audio files
-    metadata = load_audio_metadata()
+    # Load metadata for current user from MongoDB
+    audio_files = load_audio_metadata(session['username'])
     
-    # Filter audio files for current user
-    user_audio = {}
-    for filename, data in metadata.items():
-        if data.get('user') == session['username']:
-            # Check if the file still exists
-            if os.path.exists(os.path.join(TEMP_DIR, filename)):
-                user_audio[filename] = data
+    # Filter out files that don't exist anymore
+    existing_audio_files = []
+    for audio in audio_files:
+        if 'filename' in audio and os.path.exists(os.path.join(TEMP_DIR, audio['filename'])):
+            existing_audio_files.append(audio)
     
     # Sort by timestamp, newest first
     sorted_audio = sorted(
-        [{'filename': k, **v} for k, v in user_audio.items()],
-        key=lambda x: x['timestamp'],
+        existing_audio_files,
+        key=lambda x: x.get('timestamp', datetime.datetime.min),
         reverse=True
     )
     
     return render_template('history.html', audio_files=sorted_audio)
+
+# Add an admin panel route
+@app.route('/admin/users')
+def admin_users():
+    if 'username' not in session or session['username'] != 'admin':
+        return redirect(url_for('login'))
+    
+    users = list(mongo.db.users.find())
+    # Convert ObjectId to string for JSON serialization
+    for user in users:
+        user['_id'] = str(user['_id'])
+    
+    return render_template('admin_users.html', users=users)
+
+# Add a user creation route for admin
+@app.route('/admin/users/create', methods=['GET', 'POST'])
+def admin_create_user():
+    if 'username' not in session or session['username'] != 'admin':
+        return redirect(url_for('login'))
+    
+    if request.method == 'POST':
+        username = request.form.get('username')
+        password = request.form.get('password')
+        name = request.form.get('name')
+        
+        # Check if username already exists
+        existing_user = mongo.db.users.find_one({"username": username})
+        if existing_user:
+            return render_template('admin_create_user.html', error='Username already exists')
+            
+        hashed_password = generate_password_hash(password)
+        
+        mongo.db.users.insert_one({
+            "username": username,
+            "password": hashed_password,
+            "name": name
+        })
+        
+        return redirect(url_for('admin_users'))
+    
+    return render_template('admin_create_user.html')
+
+@app.route('/debug/mongo')
+def debug_mongo():
+    try:
+        # Check MongoDB connection
+        mongo.db.command('ping')
+        
+        # Get user count
+        user_count = mongo.db.users.count_documents({})
+        
+        # Get a list of users (only names for security)
+        users = [{"username": user["username"], "name": user["name"]} 
+                for user in mongo.db.users.find()]
+        
+        return jsonify({
+            "status": "MongoDB connected",
+            "user_count": user_count,
+            "users": users
+        })
+    except Exception as e:
+        return jsonify({
+            "status": "MongoDB error",
+            "error": str(e)
+        }), 500
 
 if __name__ == '__main__':
     app.run(debug=True, host='0.0.0.0', port=5000)
